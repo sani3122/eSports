@@ -1,0 +1,34 @@
+name: Auto YouTube Live Scraper
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'  # Runs automatically every 10 minutes
+  workflow_dispatch:        # Allows manual trigger anytime from GitHub UI
+
+jobs:
+  scrape-and-update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Scraper Script
+        run: python youtube.py
+        continue-on-error: true  # Prevents workflow failure if channel is offline
+
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto-update live M3U playlist"
+          file_pattern: "live_playlist.m3u"
