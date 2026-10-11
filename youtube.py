@@ -2,19 +2,20 @@ import subprocess
 import sys
 import json
 
-# Search query via yt-dlp search index (bypasses direct channel IP blocks)
+# Target channel URL directly
 CHANNEL_HANDLE = "@swmehreenlive"
-SEARCH_QUERY = f"ytsearch5:{CHANNEL_HANDLE} live"
+CHANNEL_URL = f"https://www.youtube.com/{CHANNEL_HANDLE}/streams"
 OUTPUT_M3U = "live_playlist.m3u"
 
-def get_live_stream_info(search_query):
+def get_live_stream_info(url):
     try:
-        # Using ytsearch with android client which works reliably on cloud servers
+        # Using web + android client arguments with flat-playlist to bypass cloud blocks
         command = [
             "yt-dlp",
-            "--extractor-args", "youtube:player_client=android",
+            "--extractor-args", "youtube:player_client=web,android",
             "--dump-json",
-            search_query
+            "--playlist-end", "5",
+            url
         ]
         
         result = subprocess.run(command, capture_output=True, text=True, check=True)
@@ -26,18 +27,43 @@ def get_live_stream_info(search_query):
             try:
                 data = json.loads(line)
                 
+                # Check if it's live or active
+                live_status = data.get("live_status")
+                is_live = data.get("is_live")
                 stream_url = data.get("url", "")
                 title = data.get("title", "Live Stream")
                 thumbnail = data.get("thumbnail", "")
                 
-                # CRITICAL RULE: Must have a URL and MUST NOT contain "videoplayback"
+                # If we get a direct playable URL that isn't a recorded video playback
                 if stream_url and "videoplayback" not in stream_url:
                     return stream_url, title, thumbnail
+                
+                # Fallback: If it lists a video ID from the streams page, grab its direct stream URL
+                video_id = data.get("id")
+                if video_id and (live_status == "is_live" or is_live):
+                    video_url = f"https://www.youtube.com/watch?v={video_id}"
+                    sub_cmd = [
+                        "yt-dlp",
+                        "--extractor-args", "youtube:player_client=web,android",
+                        "--print", "url",
+                        "--print", "title",
+                        "--print", "thumbnail",
+                        video_url
+                    ]
+                    sub_res = subprocess.run(sub_cmd, capture_output=True, text=True)
+                    if sub_res.returncode == 0:
+                        out_lines = sub_res.stdout.strip().split("\n")
+                        if len(out_lines) >= 3:
+                            s_url = out_lines[0].strip()
+                            s_title = out_lines[1].strip()
+                            s_thumb = out_lines[2].strip()
+                            if s_url and "videoplayback" not in s_url:
+                                return s_url, s_title, s_thumb
             except json.JSONDecodeError:
                 continue
 
     except Exception as e:
-        print(f"[-] Search extraction error: {e}")
+        print(f"[-] Error: {e}")
         
     return None, None, None
 
@@ -60,12 +86,12 @@ def update_m3u_file(stream_url, title, thumbnail):
     return True
 
 if __name__ == "__main__":
-    print(f"[*] Running search scraper for {CHANNEL_HANDLE}...")
-    stream_url, title, thumbnail = get_live_stream_info(SEARCH_QUERY)
+    print(f"[*] Scanning channel streams for {CHANNEL_HANDLE}...")
+    stream_url, title, thumbnail = get_live_stream_info(CHANNEL_URL)
     
     if stream_url:
         update_m3u_file(stream_url, title, thumbnail)
     else:
-        print("[-] Channel is currently offline or no active live stream found.")
+        print("[-] Channel is currently offline.")
         sys.exit(1)
         
