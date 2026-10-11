@@ -1,108 +1,105 @@
 import subprocess
 import sys
 import json
-import urllib.request
-import xml.etree.ElementTree as ET
+from playwright.sync_api import sync_playwright
 
-# Target channel handle and its public RSS feed URL (bypasses all cloud/IP blocks)
-CHANNEL_HANDLE = "@swmehreenlive"
-CHANNEL_ID_OVERRIDE = None  # Will be resolved automatically if needed
+CHANNEL_HANDLE = "@ffesportsbr"
+CHANNEL_LIVE_URL = f"https://www.youtube.com/{CHANNEL_HANDLE}/live"
+OUTPUT_M3U = "live_playlist.m3u"
 
-def get_channel_feed_url(handle):
-    # Fetch the channel page HTML to extract the channel ID safely
-    try:
-        url = f"https://www.youtube.com/{handle}"
-        req = urllib.request.Request(
-            url, 
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+def get_live_stream_via_browser():
+    print(f"[*] Launching Headless Chromium Browser...")
+    with sync_playwright() as p:
+        # Launch Chromium browser just like a real PC/phone browser
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-        with urllib.request.urlopen(req) as response:
-            html = response.read().decode("utf-8")
-            # Look for channel_id inside meta tags
-            for line in html.split("\n"):
-                if "channel_id" in line or "externalId" in line:
-                    # Extract ID using simple string partitioning
-                    if '"channel_id":"' in line:
-                        cid = line.split('"channel_id":"')[1].split('"')[0]
-                        return f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}"
-    except Exception as e:
-        print(f"[-] Could not resolve channel feed: {e}")
-    return None
+        page = context.new_page()
+        
+        target_video_url = None
+        
+        # Intercept network requests or listen for the live page URL
+        def handle_request(route, request):
+            nonlocal target_video_url
+            if "/watch?v=" in request.url and not target_video_url:
+                # Catch the live watch URL when the browser loads it
+                clean_url = request.url.split("&")[0]
+                if "watch?v=" in clean_url:
+                    target_video_url = clean_url
+            route.continue_()
 
-def get_active_live_stream():
-    # 1. Get RSS XML feed for the channel
-    feed_url = get_channel_feed_url(CHANNEL_HANDLE)
-    if not feed_url:
-        print("[-] Failed to get channel RSS feed.")
+        page.route("**/*", handle_request)
+        
+        try:
+            print(f"[*] Navigating to {CHANNEL_LIVE_URL}...")
+            page.goto(CHANNEL_LIVE_URL, timeout=60000)
+            page.wait_for_timeout(5000) # Wait for page scripts to execute
+            
+            # If network intercept didn't catch it, grab the current URL of the page
+            current_url = page.url
+            if "watch?v=" in current_url:
+                target_video_url = current_url
+                
+        except Exception as e:
+            print(f"[-] Browser navigation error: {e}")
+            
+        browser.close()
+        return target_video_url
+
+def extract_stream_data(video_url):
+    if not video_url:
         return None, None, None
         
+    print(f"[*] Extracting stream info from: {video_url}")
     try:
-        req = urllib.request.Request(feed_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req) as response:
-            xml_data = response.read()
-            
-        root = ET.fromstring(xml_data)
-        # Namespace used in YouTube RSS feeds
-        ns = {"yt": "http://www.youtube.com/xml/schemas/2005", "atom": "http://www.w3.org/2005/Atom"}
+        command = [
+            "yt-dlp",
+            "--extractor-args", "youtube:player_client=android,web",
+            "--print", "url",
+            "--print", "title",
+            "--print", "thumbnail",
+            video_url
+        ]
         
-        # Check recent videos in the feed
-        for entry in root.findall("atom:entry", ns):
-            video_id = entry.find("yt:videoId", ns).text
-            title = entry.find("atom:title", ns).text
-            video_url = f"https://www.youtube.com/watch?v={video_id}"
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        lines = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
+        
+        if len(lines) >= 3:
+            stream_url = lines[0]
+            title = lines[1]
+            thumbnail = lines[2]
             
-            print(f"[*] Checking recent feed video: {title} ({video_url})")
-            
-            # Use yt-dlp to inspect if this specific video is currently live
-            command = [
-                "yt-dlp",
-                "--extractor-args", "youtube:player_client=android",
-                "--dump-json",
-                video_url
-            ]
-            
-            res = subprocess.run(command, capture_output=True, text=True)
-            if res.returncode == 0 and res.stdout.strip():
-                data = json.loads(res.stdout.strip().split("\n")[0])
-                stream_url = data.get("url", "")
-                is_live = data.get("is_live") or data.get("live_status") == "is_live"
-                thumbnail = data.get("thumbnail", "")
-                
-                # Verify it is genuinely live and NOT a videoplayback archive
-                if is_live and stream_url and "videoplayback" not in stream_url:
-                    return stream_url, title, thumbnail
-                    
+            if stream_url and "videoplayback" not in stream_url:
+                return stream_url, title, thumbnail
     except Exception as e:
-        print(f"[-] Error parsing XML feed: {e}")
+        print(f"[-] yt-dlp extraction failed: {e}")
         
     return None, None, None
 
 def update_m3u_file(stream_url, title, thumbnail):
-    OUTPUT_M3U = "live_playlist.m3u"
     if not stream_url:
-        print("[-] No active live stream found via RSS feed.")
+        print("[-] No active live stream found.")
         return False
         
     safe_title = title.replace('"', '')
-    
     m3u_content = f"""#EXTM3U
 #EXTINF:-1 tvg-id="1" tvg-name="{safe_title}" tvg-logo="{thumbnail}" group-title="YouTube Live",{safe_title}
 {stream_url}
 """
-    
     with open(OUTPUT_M3U, "w", encoding="utf-8") as f:
         f.write(m3u_content)
         
-    print(f"[+] FINAL BOSS SUCCESS! M3U updated with active stream: '{safe_title}'")
+    print(f"[+] SUCCESS! M3U updated with: '{safe_title}'")
     return True
 
 if __name__ == "__main__":
-    print(f"[*] Querying YouTube RSS feed for {CHANNEL_HANDLE}...")
-    stream_url, title, thumbnail = get_active_live_stream()
-    
-    if stream_url:
-        update_m3u_file(stream_url, title, thumbnail)
-    else:
-        print("[-] Channel is offline. No update made.")
-        sys.exit(1)
-        
+    video_url = get_live_stream_via_browser()
+    if video_url:
+        stream_url, title, thumbnail = extract_stream_data(video_url)
+        if stream_url:
+            update_m3u_file(stream_url, title, thumbnail)
+            sys.exit(0)
+            
+    print("[-] Channel is offline or live stream could not be loaded via browser.")
+    sys.exit(1)
