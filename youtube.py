@@ -2,20 +2,19 @@ import subprocess
 import sys
 import json
 
-# Set the channel handle you want to scrape
+# Search query via yt-dlp search index (bypasses direct channel IP blocks)
 CHANNEL_HANDLE = "@swmehreenlive"
-CHANNEL_URL = f"https://www.youtube.com/{CHANNEL_HANDLE}/streams"
+SEARCH_QUERY = f"ytsearch5:{CHANNEL_HANDLE} live"
 OUTPUT_M3U = "live_playlist.m3u"
 
-def get_live_stream_info(url):
+def get_live_stream_info(search_query):
     try:
-        # Command optimized for cloud runners (GitHub Actions / Linux / Windows)
+        # Using ytsearch with android client which works reliably on cloud servers
         command = [
             "yt-dlp",
             "--extractor-args", "youtube:player_client=android",
             "--dump-json",
-            "--playlist-end", "10",
-            url
+            search_query
         ]
         
         result = subprocess.run(command, capture_output=True, text=True, check=True)
@@ -27,21 +26,18 @@ def get_live_stream_info(url):
             try:
                 data = json.loads(line)
                 
-                is_live = data.get("is_live") is True or data.get("live_status") == "is_live"
                 stream_url = data.get("url", "")
                 title = data.get("title", "Live Stream")
                 thumbnail = data.get("thumbnail", "")
                 
-                # Verify active live stream (exclude recorded videoplayback files)
+                # CRITICAL RULE: Must have a URL and MUST NOT contain "videoplayback"
                 if stream_url and "videoplayback" not in stream_url:
-                    return stream_url, title, thumbnail
-                elif is_live and stream_url:
                     return stream_url, title, thumbnail
             except json.JSONDecodeError:
                 continue
 
     except Exception as e:
-        print(f"[-] Extraction error: {e}")
+        print(f"[-] Search extraction error: {e}")
         
     return None, None, None
 
@@ -64,12 +60,12 @@ def update_m3u_file(stream_url, title, thumbnail):
     return True
 
 if __name__ == "__main__":
-    print(f"[*] Scraper running for {CHANNEL_HANDLE}...")
-    stream_url, title, thumbnail = get_live_stream_info(CHANNEL_URL)
+    print(f"[*] Running search scraper for {CHANNEL_HANDLE}...")
+    stream_url, title, thumbnail = get_live_stream_info(SEARCH_QUERY)
     
     if stream_url:
         update_m3u_file(stream_url, title, thumbnail)
     else:
-        print("[-] No active live stream found.")
+        print("[-] Channel is currently offline or no active live stream found.")
         sys.exit(1)
         
