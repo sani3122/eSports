@@ -3,20 +3,21 @@ import sys
 import json
 import os
 
-CHANNEL_HANDLE = "@ffesportsbr"
-SEARCH_QUERY = f"ytsearch3:{CHANNEL_HANDLE} live"
+CHANNEL_URL = "https://www.youtube.com/@ffesportsbr/streams"
 OUTPUT_M3U = "live_playlist.m3u"
 COOKIES_PATH = os.path.expanduser("~/.cache/yt-dlp/youtube/cookies.txt")
 
 def get_live_stream():
-    print(f"[*] Fetching live stream using authenticated session...")
+    print(f"[*] Fetching live stream directly from channel streams tab...")
     try:
+        # Using authenticated cookies directly on the channel streams tab
         command = [
             "yt-dlp",
             "--cookies", COOKIES_PATH,
             "--extractor-args", "youtube:player_client=android,web",
             "--dump-json",
-            SEARCH_QUERY
+            "--playlist-end", "5",
+            CHANNEL_URL
         ]
         
         result = subprocess.run(command, capture_output=True, text=True, check=True)
@@ -30,9 +31,35 @@ def get_live_stream():
                 stream_url = data.get("url", "")
                 title = data.get("title", "Live Stream")
                 thumbnail = data.get("thumbnail", "")
+                is_live = data.get("is_live")
+                live_status = data.get("live_status")
                 
-                if stream_url and "videoplayback" not in stream_url:
+                # Check if it's currently live or active
+                if (is_live or live_status == "is_live") and stream_url and "videoplayback" not in stream_url:
                     return stream_url, title, thumbnail
+                    
+                # Fallback: If it's a video ID from the playlist, extract its direct stream URL
+                video_id = data.get("id")
+                if video_id and (is_live or live_status == "is_live"):
+                    video_url = f"https://www.youtube.com/watch?v={video_id}"
+                    sub_cmd = [
+                        "yt-dlp",
+                        "--cookies", COOKIES_PATH,
+                        "--extractor-args", "youtube:player_client=android,web",
+                        "--print", "url",
+                        "--print", "title",
+                        "--print", "thumbnail",
+                        video_url
+                    ]
+                    sub_res = subprocess.run(sub_cmd, capture_output=True, text=True)
+                    if sub_res.returncode == 0:
+                        out_lines = [l.strip() for l in sub_res.stdout.strip().split("\n") if l.strip()]
+                        if len(out_lines) >= 3:
+                            s_url = out_lines[0]
+                            s_title = out_lines[1]
+                            s_thumb = out_lines[2]
+                            if s_url and "videoplayback" not in s_url:
+                                return s_url, s_title, s_thumb
             except json.JSONDecodeError:
                 continue
     except Exception as e:
@@ -60,5 +87,5 @@ if __name__ == "__main__":
         update_m3u_file(stream_url, title, thumbnail)
         sys.exit(0)
     else:
-        print("[-] Channel is offline.")
+        print("[-] Channel is offline or stream is protected.")
         sys.exit(1)
