@@ -21,14 +21,18 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install yt-dlp
+
+      - name: Setup YouTube Cookies
+        run: |
+          mkdir -p ~/.cache/yt-dlp/youtube
+          echo "${{ secrets.YOUTUBE_COOKIES }}" > ~/.cache/yt-dlp/youtube/cookies.txt
 
       - name: Run Scraper Script
         run: python youtube.py
-        continue-on-error: true
 
       - name: Commit and push changes
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Auto-update live M3U playlist via Headless Browser"
+          commit_message: "Auto-update live M3U playlist with cookies"
           file_pattern: "live_playlist.m3u"
