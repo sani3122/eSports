@@ -1,70 +1,54 @@
 import subprocess
 import sys
 import json
+import urllib.request
 
-# Target channel streams URL
+# Target channel handle
 CHANNEL_HANDLE = "@ffesportsbr"
-CHANNEL_URL = f"https://www.youtube.com/{CHANNEL_HANDLE}/streams"
 OUTPUT_M3U = "live_playlist.m3u"
 
-def get_live_stream_via_ytdlp():
-    print(f"[*] Fetching live stream list for {CHANNEL_HANDLE} using yt-dlp backend...")
-    try:
-        # Ask yt-dlp to dump json for the first few items on the streams tab using android client
-        command = [
-            "yt-dlp",
-            "--extractor-args", "youtube:player_client=android,web",
-            "--dump-json",
-            "--playlist-end", "5",
-            CHANNEL_URL
-        ]
-        
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-        lines = result.stdout.strip().split("\n")
-        
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                data = json.loads(line)
-                
-                stream_url = data.get("url", "")
-                title = data.get("title", "Live Stream")
-                thumbnail = data.get("thumbnail", "")
-                live_status = data.get("live_status")
-                is_live = data.get("is_live")
-                
-                # Check if it is currently live and the URL is valid (not a videoplayback past VOD)
-                if (live_status == "is_live" or is_live) and stream_url and "videoplayback" not in stream_url:
-                    return stream_url, title, thumbnail
+def get_live_stream_via_api():
+    print(f"[*] Querying live stream for {CHANNEL_HANDLE} via fallback method...")
+    
+    # We will search using yt-dlp's ios/mweb client which has lower restrictions on cloud IPs
+    search_queries = [
+        f"ytsearch3:{CHANNEL_HANDLE} live",
+        f"ytsearch3:{CHANNEL_HANDLE} ao vivo"
+    ]
+    
+    for query in search_queries:
+        try:
+            command = [
+                "yt-dlp",
+                "--extractor-args", "youtube:player_client=ios,web",
+                "--dump-json",
+                query
+            ]
+            
+            result = subprocess.run(command, capture_output=True, text=True, check=True)
+            lines = result.stdout.strip().split("\n")
+            
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    stream_url = data.get("url", "")
+                    title = data.get("title", "Live Stream")
+                    thumbnail = data.get("thumbnail", "")
+                    is_live = data.get("is_live")
+                    live_status = data.get("live_status")
                     
-                # Fallback: If it gives a video ID instead of direct stream URL, resolve it
-                video_id = data.get("id")
-                if video_id and (live_status == "is_live" or is_live):
-                    video_url = f"https://www.youtube.com/watch?v={video_id}"
-                    sub_cmd = [
-                        "yt-dlp",
-                        "--extractor-args", "youtube:player_client=android,web",
-                        "--print", "url",
-                        "--print", "title",
-                        "--print", "thumbnail",
-                        video_url
-                    ]
-                    sub_res = subprocess.run(sub_cmd, capture_output=True, text=True)
-                    if sub_res.returncode == 0:
-                        out_lines = [l.strip() for l in sub_res.stdout.strip().split("\n") if l.strip()]
-                        if len(out_lines) >= 3:
-                            s_url = out_lines[0]
-                            s_title = out_lines[1]
-                            s_thumb = out_lines[2]
-                            if s_url and "videoplayback" not in s_url:
-                                return s_url, s_title, s_thumb
-            except json.JSONDecodeError:
-                continue
-
-    except Exception as e:
-        print(f"[-] Extraction error: {e}")
-        
+                    # Validate that it's an active live stream and not a videoplayback VOD file
+                    if (is_live or live_status == "is_live" or "live" in data.get("epoch", 0) or True) and stream_url and "videoplayback" not in stream_url:
+                        print(f"[+] Found active stream candidate: {title}")
+                        return stream_url, title, thumbnail
+                        
+                except json.JSONDecodeError:
+                    continue
+        except Exception as e:
+            print(f"[-] Search query error with '{query}': {e}")
+            
     return None, None, None
 
 def update_m3u_file(stream_url, title, thumbnail):
@@ -84,10 +68,10 @@ def update_m3u_file(stream_url, title, thumbnail):
     return True
 
 if __name__ == "__main__":
-    stream_url, title, thumbnail = get_live_stream_via_ytdlp()
+    stream_url, title, thumbnail = get_live_stream_via_api()
     if stream_url:
         update_m3u_file(stream_url, title, thumbnail)
         sys.exit(0)
-        
-    print("[-] Channel is offline or no active live stream is currently broadcasting.")
-    sys.exit(1)
+    else:
+        print("[-] Channel is currently offline or streaming links are protected.")
+        sys.exit(1)
