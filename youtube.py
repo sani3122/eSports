@@ -1,74 +1,93 @@
-import subprocess
-import sys
+import urllib.request
 import json
-import os
+import sys
+import subprocess
 
-CHANNEL_URL = "https://www.youtube.com/@ffesportsbr/streams"
+# Target channel handle
+CHANNEL_HANDLE = "@ffesportsbr"
 OUTPUT_M3U = "live_playlist.m3u"
-COOKIES_PATH = os.path.expanduser("~/.cache/yt-dlp/youtube/cookies.txt")
 
-def get_live_stream():
-    print(f"[*] Fetching live stream directly from channel streams tab...")
-    try:
-        # Using authenticated cookies directly on the channel streams tab
-        command = [
-            "yt-dlp",
-            "--cookies", COOKIES_PATH,
-            "--extractor-args", "youtube:player_client=android,web",
-            "--dump-json",
-            "--playlist-end", "5",
-            CHANNEL_URL
-        ]
-        
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-        lines = result.stdout.strip().split("\n")
-        
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                data = json.loads(line)
-                stream_url = data.get("url", "")
-                title = data.get("title", "Live Stream")
-                thumbnail = data.get("thumbnail", "")
-                is_live = data.get("is_live")
-                live_status = data.get("live_status")
+# Public, reliable Invidious API instances
+INVIDIOUS_INSTANCES = [
+    "https://invidious.privacyredirect.com",
+    "https://vid.puffyan.us",
+    "https://inv.nadeko.net",
+    "https://invidious.perennialte.ch"
+]
+
+def get_live_stream_via_invidious():
+    print(f"[*] Resolving channel ID for {CHANNEL_HANDLE}...")
+    
+    # 1. Clean the channel handle
+    clean_handle = CHANNEL_HANDLE.replace("@", "")
+    
+    channel_id = None
+    # Try fetching channel info from Invidious instances
+    for instance in INVIDIOUS_INSTANCES:
+        try:
+            api_url = f"{instance}/api/v1/channels/search/{clean_handle}"
+            req = urllib.request.Request(
+                api_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode("utf-8"))
+                if data and len(data) > 0:
+                    channel_id = data[0].get("authorId")
+                    if channel_id:
+                        print(f"[+] Found channel ID: {channel_id}")
+                        break
+        except Exception as e:
+            continue
+            
+    if not channel_id:
+        print("[-] Could not resolve channel ID from Invidious instances.")
+        return None, None, None
+
+    # 2. Fetch active live streams from the channel using Invidious API
+    for instance in INVIDIOUS_INSTANCES:
+        try:
+            live_api_url = f"{instance}/api/v1/channels/{channel_id}/live"
+            req = urllib.request.Request(
+                live_api_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                live_data = json.loads(response.read().decode("utf-8"))
                 
-                # Check if it's currently live or active
-                if (is_live or live_status == "is_live") and stream_url and "videoplayback" not in stream_url:
-                    return stream_url, title, thumbnail
+                # Invidious returns live videos if active
+                if live_data and isinstance(live_data, list) and len(live_data) > 0:
+                    video_id = live_data[0].get("videoId")
+                    title = live_data[0].get("title", "Live Stream")
                     
-                # Fallback: If it's a video ID from the playlist, extract its direct stream URL
-                video_id = data.get("id")
-                if video_id and (is_live or live_status == "is_live"):
-                    video_url = f"https://www.youtube.com/watch?v={video_id}"
-                    sub_cmd = [
-                        "yt-dlp",
-                        "--cookies", COOKIES_PATH,
-                        "--extractor-args", "youtube:player_client=android,web",
-                        "--print", "url",
-                        "--print", "title",
-                        "--print", "thumbnail",
-                        video_url
-                    ]
-                    sub_res = subprocess.run(sub_cmd, capture_output=True, text=True)
-                    if sub_res.returncode == 0:
-                        out_lines = [l.strip() for l in sub_res.stdout.strip().split("\n") if l.strip()]
-                        if len(out_lines) >= 3:
-                            s_url = out_lines[0]
-                            s_title = out_lines[1]
-                            s_thumb = out_lines[2]
-                            if s_url and "videoplayback" not in s_url:
-                                return s_url, s_title, s_thumb
-            except json.JSONDecodeError:
-                continue
-    except Exception as e:
-        print(f"[-] Error: {e}")
+                    if video_id:
+                        video_url = f"https://www.youtube.com/watch?v={video_id}"
+                        print(f"[+] Found live video ID: {video_id} -> Fetching stream manifest...")
+                        
+                        # Use yt-dlp to grab the direct HLS stream link from the video ID
+                        cmd = [
+                            "yt-dlp",
+                            "--extractor-args", "youtube:player_client=android,web",
+                            "--print", "url",
+                            "--print", "thumbnail",
+                            video_url
+                        ]
+                        res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                        if res.returncode == 0:
+                            lines = [l.strip() for l in res.stdout.strip().split("\n") if l.strip()]
+                            if len(lines) >= 2:
+                                stream_url = lines[0]
+                                thumbnail = lines[1]
+                                if stream_url and "videoplayback" not in stream_url:
+                                    return stream_url, title, thumbnail
+        except Exception as e:
+            continue
+            
     return None, None, None
 
 def update_m3u_file(stream_url, title, thumbnail):
     if not stream_url:
-        print("[-] No active live stream found.")
+        print("[-] No active live stream found via Invidious proxy.")
         return False
         
     safe_title = title.replace('"', '')
@@ -78,14 +97,14 @@ def update_m3u_file(stream_url, title, thumbnail):
 """
     with open(OUTPUT_M3U, "w", encoding="utf-8") as f:
         f.write(m3u_content)
-    print(f"[+] SUCCESS! M3U updated with active stream: '{safe_title}'")
+    print(f"[+] SUCCESS! M3U updated with stream: '{safe_title}'")
     return True
 
 if __name__ == "__main__":
-    stream_url, title, thumbnail = get_live_stream()
+    stream_url, title, thumbnail = get_live_stream_via_invidious()
     if stream_url:
         update_m3u_file(stream_url, title, thumbnail)
         sys.exit(0)
     else:
-        print("[-] Channel is offline or stream is protected.")
+        print("[-] Channel is currently offline or no live stream detected.")
         sys.exit(1)
