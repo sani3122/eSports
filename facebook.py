@@ -2,20 +2,21 @@ import subprocess
 import sys
 import json
 
-PAGE_URL = "https://www.facebook.com/ffesportsbdofficial/videos"
+# ফেসবুক পেজের লাইভ ট্যাব সরাসরি টার্গেট করা
+PAGE_LIVE_URL = "https://www.facebook.com/ffesportsbdofficial/live/"
 OUTPUT_M3U = "live_playlist.m3u"
 
 def get_active_facebook_lives():
-    print(f"[*] Fetching active lives from {PAGE_URL}...")
+    print(f"[*] Fetching active live streams from {PAGE_LIVE_URL}...")
     active_streams = []
     
     try:
-        # yt-dlp দিয়ে ফেসবুক পেজের ভিডিওগুলো JSON ফরম্যাটে ডাম্প করা
+        # yt-dlp দিয়ে সরাসরি লাইভ পেজ থেকে ইনফো ফেচ করা
         command = [
             "yt-dlp",
             "--flat-playlist",
             "--dump-json",
-            PAGE_URL
+            PAGE_LIVE_URL
         ]
         
         result = subprocess.run(command, capture_output=True, text=True, check=True)
@@ -26,25 +27,26 @@ def get_active_facebook_lives():
                 continue
             try:
                 data = json.loads(line)
-                video_url = data.get("url") or f"https://www.facebook.com/watch/?v={data.get('id')}"
+                video_id = data.get("id")
                 title = data.get("title", "Facebook Live Stream")
-                is_live = data.get("is_live")
                 
-                # যদি সরাসরি is_live ট্যাগ পাওয়া যায় অথবা টাইটেলে/স্ট্যাটাসে লাইভ বোঝায়
-                if is_live or data.get("live_status") == "is_live":
-                    print(f"[+] Found Live Candidate: {title}")
+                if video_id:
+                    video_url = f"https://www.facebook.com/watch/?v={video_id}"
+                    print(f"[+] Checking video ID: {video_id} -> {title}")
                     
-                    # লাইভ ভিডিওর ডিরেক্ট স্ট্রিম এমথ্রিউইট লিংক বের করা
+                    # ডিরেক্ট স্ট্রিম লিংক বের করার চেষ্টা
                     sub_cmd = ["yt-dlp", "--print", "url", "--print", "title", video_url]
-                    sub_res = subprocess.run(sub_cmd, capture_output=True, text=True, timeout=30)
+                    sub_res = subprocess.run(sub_cmd, capture_output=True, text=True, timeout=25)
                     
                     if sub_res.returncode == 0:
                         out_lines = [l.strip() for l in sub_res.stdout.strip().split("\n") if l.strip()]
                         if len(out_lines) >= 2:
                             stream_url = out_lines[0]
                             stream_title = out_lines[1]
-                            if stream_url and "m3u8" in stream_url or "akamaized" in stream_url or "fbcdn" in stream_url:
+                            # ভ্যালিড স্ট্রিম লিংক ফিল্টার করা
+                            if stream_url and ("m3u8" in stream_url or "akamaized" in stream_url or "fbcdn" in stream_url or "video" in stream_url):
                                 active_streams.append((stream_title, stream_url))
+                                break  # প্রথম চলমান লাইভটি পেলেই লুপ ব্রেক করে নিতে পারবে
             except json.JSONDecodeError:
                 continue
     except Exception as e:
@@ -54,8 +56,7 @@ def get_active_facebook_lives():
 
 def update_m3u_file(streams):
     if not streams:
-        print("[-] No active live streams found on the Facebook page right now.")
-        # আপনি চাইলে পেজ অফলাইন থাকলে ফাঁকা বা আগের ফাইল রাখতে পারেন
+        print("[-] No active live streams found.")
         return False
         
     m3u_content = "#EXTM3U\n"
@@ -66,7 +67,7 @@ def update_m3u_file(streams):
         
     with open(OUTPUT_M3U, "w", encoding="utf-8") as f:
         f.write(m3u_content)
-    print(f"[+] SUCCESS! M3U updated with {len(streams)} active live stream(s).")
+    print(f"[+] SUCCESS! M3U updated with active live stream.")
     return True
 
 if __name__ == "__main__":
