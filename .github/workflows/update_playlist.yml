@@ -1,9 +1,9 @@
-name: Auto YouTube Live Scraper
+name: Auto Facebook Live Scraper
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
-  workflow_dispatch:
+    - cron: '*/10 * * * *'  # প্রতি ১০ মিনিট পর পর রান হবে
+  workflow_dispatch:        # ম্যানুয়ালি রান করার অপশন
 
 jobs:
   scrape-and-update:
@@ -21,18 +21,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yt-dlp
-
-      - name: Setup YouTube Cookies
-        run: |
-          mkdir -p ~/.cache/yt-dlp/youtube
-          echo "${{ secrets.YOUTUBE_COOKIES }}" > ~/.cache/yt-dlp/youtube/cookies.txt
+          pip install -r requirements.txt
 
       - name: Run Scraper Script
-        run: python youtube.py
+        run: python facebook.py
 
       - name: Commit and push changes
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Auto-update live M3U playlist with cookies"
+          commit_message: "Auto-update Facebook live M3U playlist"
           file_pattern: "live_playlist.m3u"
+          
