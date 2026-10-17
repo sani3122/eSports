@@ -3,7 +3,7 @@ import sys
 import json
 
 # ফেসবুক পেজের সরাসরি লাইভ ট্যাব
-PAGE_URL = "https://www.facebook.com/ffesportsbdofficial/live"
+PAGE_URL = "https://www.facebook.com/share/19iDbdSrJK/live"
 OUTPUT_M3U = "live_playlist.m3u"
 
 def get_active_facebook_live():
