@@ -1,0 +1,3 @@
+#EXTM3U
+#EXTINF:-1, Offline - Check Back Later
+http://localhost/offline.ts
